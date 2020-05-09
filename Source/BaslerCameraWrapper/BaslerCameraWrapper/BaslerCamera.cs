@@ -14,7 +14,7 @@ namespace BaslerCameraWrapper
         private const string FriendlyNameKey = "FriendlyName";
 
         private ICamera camera;
-        private VideoWriter videoWriter;
+        private readonly VideoWriter videoWriter = new VideoWriter();
 
         public event EventHandler ImageRecived;
 
@@ -30,14 +30,12 @@ namespace BaslerCameraWrapper
         {
             get
             {
-                // Determine the current exposure time
                 return camera.Parameters[PLCamera.ExposureTime].GetValue();
             }
             set
             {
                 if (value <= ExposureTimeMax && value >= ExposureTimeMin)
                 {
-                    // Set the exposure time
                     camera.Parameters[PLCamera.ExposureTime].SetValue(value);
                 }
             }
@@ -126,7 +124,7 @@ namespace BaslerCameraWrapper
         public void Start()
         {
             camera.StreamGrabber.ImageGrabbed += StreamGrabber_ImageGrabbed;
-            camera.StreamGrabber.Start(10, GrabStrategy.LatestImages, GrabLoop.ProvidedByStreamGrabber);
+            camera.StreamGrabber.Start(GrabStrategy.OneByOne, GrabLoop.ProvidedByStreamGrabber);
         }
 
         public void Stop()
@@ -137,7 +135,6 @@ namespace BaslerCameraWrapper
 
         public void StartRecord(string fileName, double playbackFramesPerSecond)
         {
-            videoWriter = new VideoWriter();
             videoWriter.Create(fileName, playbackFramesPerSecond, camera);
             camera.StreamGrabber.ImageGrabbed += OnRecordImageRecived;
             camera.StreamGrabber.Start(GrabStrategy.OneByOne, GrabLoop.ProvidedByStreamGrabber);
@@ -148,6 +145,26 @@ namespace BaslerCameraWrapper
             camera.StreamGrabber.ImageGrabbed -= OnRecordImageRecived;
             videoWriter.Close();
             camera.StreamGrabber.Stop();
+        }
+
+        public void RecordFrames(string fileName, double playbackFramesPerSecond, int framesCount)
+        {
+            videoWriter.Create(fileName, playbackFramesPerSecond, camera);
+            camera.StreamGrabber.Start(GrabStrategy.OneByOne, GrabLoop.ProvidedByUser);
+            try
+            {
+                for (var i = 0; i < framesCount; i++)
+                {
+                    var grabResult = camera.StreamGrabber.RetrieveResult(5000, TimeoutHandling.ThrowException);
+                    videoWriter.Write(grabResult);
+                    StreamGrabber_ImageGrabbed(this, new ImageGrabbedEventArgs(grabResult));
+                }
+            }
+            finally
+            {
+                camera.StreamGrabber.Stop();
+                videoWriter.Close();
+            }
         }
 
         public void OpenPreview()
@@ -177,6 +194,7 @@ namespace BaslerCameraWrapper
         private void OnRecordImageRecived(object sender, ImageGrabbedEventArgs e)
         {
             videoWriter.Write(e.GrabResult);
+            ImageWindow.DisplayImage(0, e.GrabResult);
         }
 
         private void OnPreviewImageRecived(object sender, ImageGrabbedEventArgs e)
@@ -189,10 +207,11 @@ namespace BaslerCameraWrapper
             var converter = new PixelDataConverter();
             var bitmap = new Bitmap(grabResult.Width, grabResult.Height, PixelFormat.Format32bppRgb);
             // Lock the bits of the bitmap.
-            var bmpData = bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height), ImageLockMode.ReadWrite, bitmap.PixelFormat);
+            var rectangle = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+            var bmpData = bitmap.LockBits(rectangle, ImageLockMode.ReadWrite, bitmap.PixelFormat);
             // Place the pointer to the buffer of the bitmap.
             converter.OutputPixelFormat = PixelType.BGRA8packed;
-            IntPtr ptrBmp = bmpData.Scan0;
+            var ptrBmp = bmpData.Scan0;
             converter.Convert(ptrBmp, bmpData.Stride * bitmap.Height, grabResult);
             bitmap.UnlockBits(bmpData);
 
@@ -200,9 +219,9 @@ namespace BaslerCameraWrapper
             var height = bitmap.Height;
             var bnew = new byte[width, height];
 
-            for (int i = 0; i < width; i++)
+            for (var i = 0; i < width; i++)
             {
-                for (int j = 0; j < height; j++)
+                for (var j = 0; j < height; j++)
                 {
                     var pixelColor = bitmap.GetPixel(i, j);
                     bnew.SetValue(pixelColor.R, i, j);
@@ -210,10 +229,6 @@ namespace BaslerCameraWrapper
             }
 
             return bnew;
-
-            //var imageConverter = new ImageConverter();
-            //var bytes = (byte[])imageConverter.ConvertTo(bitmap, typeof(byte[]));
-            //return bytes;
         }
     }
 }
